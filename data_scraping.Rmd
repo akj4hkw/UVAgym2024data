@@ -128,16 +128,9 @@ get_gymter_events <- function(Names, Links) {
 gymter_events <- get_gymter_events(Names = gymter_names %>% slice(49:1059) %>% pull(Name), 
                                    Links = gymter_names %>% slice(49:1059) %>% pull(Link))
 write.csv(gymter_events, file = "gymter_events.csv", row.names = FALSE)
-
-
-gym <- bind_rows(gymter_events, gym) %>% 
-  group_by(Name) %>%
-  mutate(Birthday = ifelse(all(is.na(Birthday)), NA, first(Birthday))) %>%
-  ungroup() 
-head(gym)
 ```
 
-### Wikipedia Olympic Finals
+### Get all links to Wikipedia performance pages
 ```{r}
 get_olympic_links <- function(Years){
   # Make link_list
@@ -161,11 +154,13 @@ get_olympic_links <- function(Years){
   return(link_list)
 }
 
-all_olympic_links <- get_olympic_links(seq(2000, 2020, by = 4))
+all_olympic_links <- get_olympic_links(seq(2008, 2020, by = 4))
 ```
 
+### Wikipedia Olympic Results(Individual)
 ```{r}
-scrape_wiki_tables <- function(link){
+# Function to get every type of individual result(qualifiers and finals) except all-around
+scrape_indiv_olympic <- function(link){ 
   # Make useful functions for the future
   ### Check if it has numbers/scores
   has_numeric_columns <- function(df){
@@ -173,7 +168,8 @@ scrape_wiki_tables <- function(link){
   }
   ### Check if a table has the right kind of scores
   new_scoring <- function(df){
-    return(!any(colnames(df) %in% countrycode::codelist$country.name.en) & ("Total" %in% colnames(df)))
+    return(!any(colnames(df) %in% countrycode::codelist$country.name.en) & ("Total" %in% colnames(df))
+           & !any(grepl("J[0-9]+", colnames(df))) & !any(grepl("Judge", colnames(df), ignore.case = TRUE))   )
   }
   ### Get ready to reassign column names
   reconcile_headers <- function(df) {
@@ -193,6 +189,7 @@ scrape_wiki_tables <- function(link){
     html_nodes("table") %>%
     map(html_table, header = TRUE, fill = TRUE)
   
+  # Turn the total score category into a numeric variable with a uniform name
   for (i in 1:length(tables)){
     table <- tables[[i]]
     
@@ -205,7 +202,6 @@ scrape_wiki_tables <- function(link){
           mutate(Score = suppressWarnings(as.numeric(Score))) %>% 
           rename(Total = Score)
       }
-
     }
   }
   
@@ -229,7 +225,6 @@ scrape_wiki_tables <- function(link){
     "uneven_bars" = "UB",
     "parallel_bars" = "PB",
     "horizontal_bar" = "HB",
-    "trampoline" = "TRA",
     'pommel_horse' = "PH",
     'rings' = 'SR'
     )
@@ -252,6 +247,10 @@ scrape_wiki_tables <- function(link){
     # If no dates given, assume late July and early August?
     qual_date <- NA #paste("25 July", year) %>% dmy()
     final_date <- NA #paste("2 August", year) %>% dmy()
+  } else if (is.na(comp_dates[1])){
+    # If no dates given, assume late July and early August?
+    qual_date <- NA #paste("25 July", year) %>% dmy()
+    final_date <- NA #paste("2 August", year) %>% dmy()
   } else if (1 + str_count(comp_dates[1] ,"\\W+") == 3){
     qual_date <- comp_dates[1] %>% dmy()
     final_date <- comp_dates[2] %>% dmy()
@@ -265,7 +264,7 @@ scrape_wiki_tables <- function(link){
     # Fix the country column to be consistent
     # Fix the score column so it works and is numeric
     # Label as qualifier or gold medal round and add in the date
-    # Label apparatus & gender
+    # Label apparatus & gender & competition level
     # Standardize column names
   for (i in 1:length(tables)){
     table <- tables[[i]]
@@ -300,28 +299,52 @@ scrape_wiki_tables <- function(link){
       table$Round <- 'qual'
       table$Date <- qual_date
     }
-    # Label apparatus and gender
+    # Label apparatus and gender and Olympics
     table$Apparatus <- app_abbrev
     table$Gender <- gender
+    table$Competition <- "Olympic Games"
     # Get consistent column names
-    if (ncol(table) %in% c(16, 17)){
+    if (ncol(table) %in% c(17, 18)){
       table <- table %>% 
-        rename(D_Score1 = 4, E_Score1 = 5, Penalty1 = 6, Score1 = 7,
+        rename(D_Score = 4, E_Score = 5, Penalty = 6, Score = 7,
                D_Score2 = 8, E_Score2 = 9, Penalty2 = 10, Score2 = 11) %>% 
-        mutate(Penalty1 = abs(as.numeric(Penalty1)) %>% suppressWarnings(),
+        mutate(Penalty = abs(as.numeric(Penalty)) %>% suppressWarnings(),
                Penalty2 = abs(as.numeric(Penalty2)) %>% suppressWarnings()) %>% 
-        select(Rank, Name, Country, D_Score1, E_Score1, Penalty1, Score1, 
+        select(Rank, Name, Country, D_Score, E_Score, Penalty, Score, 
                D_Score2, E_Score2, Penalty2, Score2,
-               Total, Round, Date, Apparatus, Gender)
-    } else if(ncol(table) %in% c(11, 12)){
+               Total, Round, Date, Apparatus, Gender, Competition) %>% 
+                slice(rep(1:n(), each = 2)) %>% 
+        mutate(D_Score = ifelse(row_number() %% 2 == 0, D_Score2, D_Score) %>% as.numeric(),
+               E_Score = ifelse(row_number() %% 2 == 0, E_Score2, E_Score) %>% as.numeric(),
+               Penalty = ifelse(row_number() %% 2 == 0, Penalty2, Penalty) %>% as.numeric(),
+               Total = ifelse(row_number() %% 2 == 0, Score2, Score) %>% as.numeric(),
+               Apparatus = ifelse(
+                 row_number() %% 2 == 0, 
+                 paste(Apparatus, 2, sep = ""), paste(Apparatus, 1, sep = ""))) %>% 
+        select(-D_Score2:-Score2, -Score)
+      
+      grouped_table <- table %>% 
+        group_by(Rank, Name, Country, Round, Date, Gender, Competition) %>% 
+        summarize(D_Score = mean(D_Score, na.rm = TRUE), 
+                  E_Score = mean(E_Score, na.rm = TRUE), 
+                  Penalty = mean(Penalty, na.rm = TRUE), 
+                  Total = mean(Total, na.rm = TRUE),
+                  Apparatus = app_abbrev,
+                  .groups = "drop")
+      
+      table <- bind_rows(table, grouped_table)
+
+    } else if(ncol(table) %in% c(12, 13)){
       table <- table %>% 
         rename(D_Score = 4, E_Score = 5, Penalty = 6) %>% 
-        mutate(Penalty = abs(as.numeric(Penalty))) %>% 
-        select(Rank, Name, Country, D_Score, E_Score, Penalty, Total, Round, Date, Apparatus, Gender)
+        mutate(Penalty = abs(as.numeric(Penalty)) %>% suppressWarnings()) %>% 
+        select(Rank, Name, Country, D_Score, E_Score, Penalty, 
+               Total, Round, Date, Apparatus, Gender, Competition)
     }
     
     # Put the modified table back into the list
-    tables[[i]] <- table
+    tables[[i]] <- table %>% 
+      rename(Score = Total)
   }
   
   # Return the list of tables
@@ -330,19 +353,450 @@ scrape_wiki_tables <- function(link){
 }
 ```
 
+```{r}
+# Function to get individual all-around Olympics
+scrape_aa_olympic <- function(links){
+  ##### Make function(s) for later
+  # Checks for score tables
+  has_relevant_columns <- function(df){
+    return(  ("Gymnast" %in% colnames(df)) & ("Total" %in% colnames(df))  )
+  }
+  ##############################################################################
+  ##### Getting the correct tables and putting some link-specific data in
+  tables <- list()
+  for (link in links){
+    # Find gender from the link
+    link_str <- sub("%27s_.*$", "", link)
+    full_gender <- sub(".+_", "", link_str)
+    gender <- tolower(substr(full_gender, 1, 1))
+    # Find the dates and assign based on how complete the information is
+    year <- gsub(".*_(\\d{4}).*", "\\1", link)
+    comp_dates <- read_html(link) %>% 
+      html_nodes(".infobox-data") %>% 
+      keep(grepl("August", .) | grepl("July", .) | grepl("September", .)) %>% 
+      html_text() %>% 
+      str_match_all("(\\d+\\s+\\w+(?:\\s+\\d{4})?)") %>% 
+      unlist()
+    if (is.null(comp_dates[1])){ 
+      # If no dates given, assume late July and early August?
+      qual_date <- NA #paste("25 July", year) %>% dmy()
+      final_date <- NA #paste("2 August", year) %>% dmy()
+    } else if (is.na(comp_dates[1])){
+      # If no dates given, assume late July and early August?
+      qual_date <- NA #paste("25 July", year) %>% dmy()
+      final_date <- NA #paste("2 August", year) %>% dmy()
+    } else if (1 + str_count(comp_dates[1] ,"\\W+") == 3){
+      qual_date <- comp_dates[1] %>% dmy()
+      final_date <- comp_dates[2] %>% dmy()
+    } else if (1 + str_count(comp_dates[1] ,"\\W+") == 2){
+      qual_date <- paste(comp_dates[1], year) %>% dmy()
+      final_date <- paste(comp_dates[2], year) %>% dmy()
+    }     
+    
+    # Get all of that link's tables out
+    link_tables <- read_html(link) %>% 
+      html_nodes("table") %>% 
+      map(html_table, header = TRUE, fill = TRUE)
+    # Filter them for the ones that have the right column names
+    tables_mask <- lapply(link_tables, has_relevant_columns)
+    link_tables <- link_tables[unlist(tables_mask)]
+    ##############################################################################
+    ##### Cleaning and standardizing the tables
+    for (i in 1:length(link_tables)){
+      table <- link_tables[[i]]
+      first_col_name <- colnames(table)[1]
+      # Standardize column names and then clean
+      if ("Prelim" %in% colnames(table)){
+        if(("Prelim" %in% colnames(table)) & (gender == "m")){
+          colnames(table) <- c("Rank", "Name", "Country", "Prelim", "FX", "PH", "SR", "VT", "PB", "HB", "AA")
+        } else if(("Prelim" %in% colnames(table)) & (gender == "w")){
+          colnames(table) <- c("Rank", "Name", "Country", "Prelim", "VT", "UB", "BB", "FX", "AA")
+          table <- table %>% relocate(FX, .before = VT)
+        }
+        # Add qualifying scores in if they don't have their own table
+        link_tables[[length(link_tables) + 1]] <- table %>% 
+          select(Name, Country, Prelim) %>% 
+          mutate(Apparatus = "AA",
+                 Rank = min_rank(desc(Prelim)),
+                 Gender = gender,
+                 Date = final_date,
+                 Competition = "Olympic Games",
+                 Round = "qual") %>% 
+          rename(Score = Prelim)
+        # Add in each individual's final apparatus performance plus total performance
+        table <- table %>% 
+          select(-Prelim) %>% 
+          filter(!grepl("Did not advance", SR)) %>% 
+          mutate(across(FX:AA, ~ str_extract(., "^[^\\(]+") %>% as.numeric() %>% suppressWarnings()),
+                 Rank = min_rank(desc(AA)),
+                 Gender = gender,
+                 Date = final_date,
+                 Competition = "Olympic Games") %>% 
+          pivot_longer(cols = FX:AA,
+                       names_to = "Apparatus",
+                       values_to = "Score") %>% 
+          mutate(Round = ifelse(Apparatus != "AA", "AAfinal", "final"))   
 
-```{r, WARNING = FALSE}
-all_olympic_vaults <- all_olympic_links %>% 
-  keep(~grepl("vault", .)) %>% 
-  map(scrape_wiki_tables) %>% 
-  purrr::list_flatten() %>% 
-  keep(.p = !is.na(.)) %>% 
-  bind_rows()
-
-all_olympic_vaults 
+      } else if(!(is.na(table[1, as.name(first_col_name)])) & (table[1, as.name(first_col_name)] != "")){
+        if((gender == "m") & (("Nation" %in% colnames(table)) | ("Country" %in% colnames(table)))){
+          colnames(table) <- c("Rank", "Name", "Country", "FX", "PH", "SR", "VT", "PB", "HB", "AA", "Notes")
+        } else if(gender == "m"){
+          colnames(table) <- c("Rank", "Name", "FX", "PH", "SR", "VT", "PB", "HB", "AA", "Notes")
+          table <- table %>% 
+            mutate(Country = countrycode( str_remove_all(str_extract(Name, "\\((.*?)\\)"), "[()]"), 
+                                          origin = 'ioc', destination = 'country.name.en', 
+                                          custom_match = c("ROC" = "Russia") ) %>% suppressWarnings(),
+                   Name = str_trim(str_remove_all(Name, "\\(.*?\\)")))
+        } else if((gender == "w") & (("Nation" %in% colnames(table)) | ("Country" %in% colnames(table)))){
+          colnames(table) <- c("Rank", "Name", "Country", "VT", "UB", "BB", "FX", "AA", "Notes")
+          table <- table %>% relocate(FX, .before = VT)
+        } else if(gender == "w"){
+          colnames(table) <- c("Rank", "Name", "VT", "UB", "BB", "FX", "AA", "Notes")
+          table <- table %>% 
+            relocate(FX, .before = VT) %>% 
+            mutate(Country = countrycode( str_remove_all(str_extract(Name, "\\((.*?)\\)"), "[()]"), 
+                                          origin = 'ioc', destination = 'country.name.en', 
+                                          custom_match = c("ROC" = "Russia") ) %>% suppressWarnings(),
+                   Name = str_trim(str_remove_all(Name, "\\(.*?\\)")))
+        }
+        # Add in each individual's qualifying apparatus performance plus total qualifying performance
+        if ("Notes" %in% colnames(table)){
+          table <- table %>% select(-Notes)
+        }
+        table <- table %>% 
+          mutate(across(FX:AA, ~ str_extract(., "^[^\\(]+") %>% as.numeric() %>% suppressWarnings()),
+                 Rank = min_rank(desc(AA)),
+                 Gender = gender,
+                 Date = final_date,
+                 Competition = "Olympic Games") %>% 
+          pivot_longer(cols = FX:AA,
+                       names_to = "Apparatus",
+                       values_to = "Score") %>% 
+          mutate(Round = ifelse(Apparatus != "AA", "AAqual", "qual"))
+      } else {
+        if((gender == "m") & (("Nation" %in% colnames(table)) | ("Country" %in% colnames(table)))){
+          colnames(table) <- c("Rank", "Name", "Country", "FX", "PH", "SR", "VT", "PB", "HB", "AA", "Notes")
+        } else if((gender == "m")){
+          colnames(table) <- c("Rank", "Name", "FX", "PH", "SR", "VT", "PB", "HB", "AA", "Notes")
+          table <- table %>% # Get country/nation info if it isn't in there already
+            mutate(Country = countrycode( str_remove_all(str_extract(Name, "\\((.*?)\\)"), "[()]"), 
+                                          origin = 'ioc', destination = 'country.name.en', 
+                                          custom_match = c("ROC" = "Russia") ) %>% suppressWarnings(),
+                   Name = str_trim(str_remove_all(Name, "\\(.*?\\)")))
+        } else if((gender == "w") & ("Nation" %in% colnames(table)) | ("Country" %in% colnames(table))){
+          colnames(table) <- c("Rank", "Name", "Country", "VT", "UB", "BB", "FX", "AA", "Notes")
+          table <- table %>% relocate(FX, .before = VT)
+        } else if((gender == "w")){
+          colnames(table) <- c("Rank", "Name", "VT", "UB", "BB", "FX", "AA", "Notes")
+          table <- table %>% 
+            relocate(FX, .before = VT) %>% 
+            mutate(Country = countrycode( str_remove_all(str_extract(Name, "\\((.*?)\\)"), "[()]"), 
+                                          origin = 'ioc', destination = 'country.name.en', 
+                                          custom_match = c("ROC" = "Russia") ) %>% suppressWarnings(),
+                   Name = str_trim(str_remove_all(Name, "\\(.*?\\)")))
+        }
+        # Add in each individual's final apparatus performance plus total final performance
+        table <- table %>% 
+          mutate(across(FX:AA, ~ str_extract(., "^[^\\(]+") %>% as.numeric() %>% suppressWarnings()),
+                 Rank = min_rank(desc(AA)),
+                 Gender = "m",
+                 Date = final_date,
+                 Competition = "Olympic Games") %>% 
+          pivot_longer(cols = FX:AA,
+                       names_to = "Apparatus",
+                       values_to = "Score") %>% 
+          mutate(Round = ifelse(Apparatus != "AA", "AAfinal", "final"))   
+      }
+      
+      link_tables[[i]] <- table
+    }
+    
+    # Append that to the table list
+    tables <- append(tables, link_tables)
+  }
+  ##############################################################################
+  return(tables %>% bind_rows())
+}
 ```
 
+```{r, WARNING = FALSE}
+# Scrape all Olympic individual events from Wikipedia
+indiv_olympic_events <- all_olympic_links %>% 
+  keep(grepl("vault", .) | grepl("floor", .) | grepl("pommel_horse", .) | grepl("rings", .) | 
+         grepl("parallel_bars", .) | grepl("uneven_bars", .) | grepl("balance_beam", .) | 
+         grepl("horizontal_bar", .)) %>% 
+  map(scrape_indiv_olympic) %>% 
+  purrr::list_flatten() %>% 
+  keep(.p = !is.na(.)) 
+aa_olympic_events <- all_olympic_links %>% 
+  keep(grepl("artistic_individual_all-around", .)) %>% 
+  scrape_aa_olympic() 
 
+write.csv(bind_rows(indiv_olympic_events, aa_olympic_events), 
+          file = "indiv_olympic_events.csv", 
+          row.names = FALSE)
+```
 
+### Wikipedia Olympic Results(Team)
+```{r}
+# Function to scrape team final results
+scrape_team_finals <- function(links){
+  ##############################################################################
+  ##### Getting the correct tables and putting some link-specific data in
+  tables <- list()
+  for (link in links){
+    # Read HTML content
+    page <- read_html(link)
+    # Extract tables
+    link_tables <- page %>%
+      html_nodes("table") %>%
+      map(html_table, header = TRUE, fill = TRUE)
+    # Find gender from the link
+    link_str <- sub("%27s_.*$", "", link)
+    full_gender <- sub(".+_", "", link_str)
+    gender <- tolower(substr(full_gender, 1, 1))
+    # Find the year of the link
+    year <- gsub(".*_(\\d{4}).*", "\\1", link)
+    
+    # Get to the correct tables
+    if ((gender == "m" & year == "2008") | 
+        (gender == "w" & year == "2012") |
+        (year == "2016")){
+      table <- link_tables[[5]]
+    } else if (gender == "m" & year == "2012"){
+      table <- link_tables[[4]]
+    } else if (year == "2020" | 
+               gender == "w" & year == "2008"){
+      table <- link_tables[[6]]
+    }
+    ##############################################################################
+    ##### Cleaning and standardizing the tables
+    # Get score/rank columns straight
+    if (gender == "w"){
+      if (year == "2016"){
+        table <- table[, 1:7]
+      }
+      colnames(table) <- c("Rank", "Name", "VT", "UB", "BB", "FX", "AA")
+      table <- table[table$Name != "",]
+      table <- table %>%
+        mutate(across(c(VT, UB, BB, FX), list(
+          Score = ~as.numeric(str_remove_all(str_extract(.x, "^[^\\s(]+"), "[()]")),
+          Rank = ~as.numeric(str_remove_all(str_extract(.x, "\\((.*?)\\)"), "[()]"))
+            )),
+          AA_Score = if_else(is.na(FX_Rank), NA_real_, AA),
+          AA_Rank = min_rank(desc(AA))) %>%
+        select(-VT:-FX, -Rank, -AA)
+      
+    } else if (year == "2008" | year == "2020"){
+      colnames(table) <- c("Rank", "Name", "FX", "PH", "SR", "VT", "PB", "UB", "AA")
+      table <- table %>% 
+        mutate(across(c(FX, PH, SR, VT, PB, UB), list(
+          Score = ~as.numeric(str_remove_all(str_extract(.x, "^[^\\s(]+"), "[()]")),
+          Rank = ~as.numeric(str_remove_all(str_extract(.x, "\\((.*?)\\)"), "[()]"))
+            )),
+          AA_Score = if_else(is.na(FX_Rank), NA_real_, AA),
+          AA_Rank = min_rank(desc(AA))) %>% 
+        select(!(FX:UB), -Rank, -AA) 
+    } else {
+      colnames(table) <- c("Name", "FX_Score", "FX_Rank", "PH_Score", "PH_Rank", "SR_Score", 
+                           "SR_Rank", "VT_Score", "VT_Rank", "PB_Score", "PB_Rank", "UB_Score", 
+                           "UB_Rank", "AA_Score", "AA_Rank")
+      table <- table[-1, ]
+      table <- table[table$Name != "",]
+      
+      table <- table %>% 
+        mutate(across(FX_Score:AA_Rank, as.numeric),
+               AA_Rank = min_rank(desc(AA_Score)))
+    }
+    # Fix name and country columns
+    if ((gender == "w" & year == "2012") |
+        (year == "2008")){
+      table <- table %>% 
+        mutate(Country = ifelse(Name %in% c(codelist$country.name.en, "ROC"),
+                                Name,
+                                NA),
+               .after = Name) %>%
+        fill(Country)
+    } else {
+      table <- table %>%
+        mutate(Country = ifelse(Name %in% c(codelist$country.name.en, "ROC"),
+                                Name,
+                                NA),
+               .after = Name,
+               Name = str_trim(str_remove_all(Name, "\\(.*?\\)"))) %>% 
+        fill(Country)
+    }
+    # Select correct columns, then pivot to long format and remove incomplete rows
+    if (gender == "w"){
+      table <- table %>% 
+        select(Name, Country, starts_with(c("VT", "UB", "BB", "FX", "AA"))) %>% 
+        pivot_longer(cols = VT_Score:AA_Rank,
+             names_to = c("Apparatus", ".value"),
+             names_pattern = "(.*)_(.*)",
+             values_to = c("Score", "Rank")) %>% 
+        drop_na(Name, Score)
+    } else {
+      table <- table %>% 
+        select(Name, Country, starts_with(c("FX", "PH", "SR", "VT", "PB", "UB", "AA"))) %>% 
+        pivot_longer(cols = FX_Score:AA_Rank,
+                     names_to = c("Apparatus", ".value"),
+                     names_pattern = "(.*)_(.*)",
+                     values_to = c("Score", "Rank"))    %>% 
+        drop_na(Name, Score)
+    }
+    # Add in extra info
+    table <- table %>% 
+      mutate(Gender = gender,
+             Competition = "Olympic Games",
+             Round = "TeamFinal")
+    
+    # Save this in the overall list
+    tables <- append(tables, list(table))
+  }
+  # Return the results
+  return(tables)
+}
+```
+
+```{r}
+# Function to scrape team qualifications
+scrape_team_quals <- function(links){
+  # Get the first row to become the column names
+  reconcile_headers <- function(df) {
+    header_row <- df[1, ]
+    df <- df[-1, ]
+    colnames(df) <- make.unique(make.names(header_row), sep = "_")
+    return(df)
+  }
+  # Make function to find the right table
+  valid_table <- function(df){
+    return( any(grepl("All-around", colnames(df))) )
+  }
+  ##############################################################################
+  ##### Getting the tables out
+  table_list <- list()
+  
+  for (link in links){
+    # Read HTML content
+    page <- read_html(link)
+    # Extract tables
+    link_tables <- page %>%
+      html_nodes("table") %>%
+      map(html_table, header = TRUE, fill = TRUE)
+    # Find gender from the link
+    link_str <- sub("%27s_.*$", "", link)
+    full_gender <- sub(".+_", "", link_str)
+    gender <- tolower(substr(full_gender, 1, 1))
+    # Find the dates and assign based on how complete the information is
+    year <- gsub(".*_(\\d{4}).*", "\\1", link)
+    comp_dates <- read_html(link) %>% 
+      html_nodes(".infobox-data") %>% 
+      keep(grepl("August", .) | grepl("July", .) | grepl("September", .)) %>% 
+      html_text() %>% 
+      str_match_all("(\\d+\\s+\\w+(?:\\s+\\d{4})?)") %>% 
+      unlist()
+    if (is.null(comp_dates[1])){ 
+      # If no dates given
+      qual_date <- as.date(year)
+      final_date <- NA 
+    } else if (is.na(comp_dates[1])){
+      # If no dates given
+      qual_date <- NA 
+      final_date <- NA 
+    } else if (1 + str_count(comp_dates[1] ,"\\W+") == 3){
+      qual_date <- comp_dates[1] %>% dmy()
+      final_date <- comp_dates[2] %>% dmy()
+    } else if (1 + str_count(comp_dates[1] ,"\\W+") == 2){
+      qual_date <- paste(comp_dates[1], year) %>% dmy()
+      final_date <- paste(comp_dates[2], year) %>% dmy()
+    }
+    
+    # Filter out tables that aren't useful
+    tables_mask <- lapply(link_tables, valid_table)
+    link_tables <- link_tables[unlist(tables_mask)]
+    link_tables <- lapply(link_tables, reconcile_headers)
+    ##############################################################################
+    ##### Clean tables and extract info
+    for(i in 1:length(link_tables)){
+      table <- link_tables[[i]]
+      
+      # Assign column names(different for gender of competition)
+      if (gender == "m"){
+        if (!("Nation" %in% colnames(table))){
+        colnames(table) <- c("Name", "FX_Score", "FX_Rank", "PH_Score", "PH_Rank", 
+                             "SR_Score", "SR_Rank", "VT_Score", "VT_Rank", "PB_Score", "PB_Rank",
+                             "UB_Score", "UB_Rank", "AA_Score", "AA_Rank")
+          table <- table %>% 
+            slice(-1) %>% 
+            mutate(Country = countrycode( str_remove_all(str_extract(Name, "\\((.*?)\\)"), "[()]"), 
+                                          origin = 'ioc', destination = 'country.name.en', 
+                                          custom_match = c("ROC" = "Russia") ) %>% suppressWarnings(),
+                   .after = Name,
+                   Name = str_trim(str_remove_all(Name, "\\(.*?\\)")))
+        } 
+        colnames(table) <- c("Name", "Country", "FX_Score", "FX_Rank", "PH_Score", "PH_Rank", 
+                             "SR_Score", "SR_Rank", "VT_Score", "VT_Rank", "PB_Score", "PB_Rank",
+                             "UB_Score", "UB_Rank", "AA_Score", "AA_Rank")
+        
+      } else if (gender == "w"){
+        colnames(table) <- c("Name", "VT_Score", "VT_Rank", "UB_Score", "UB_Rank", 
+                             "BB_Score", "BB_Rank", "FX_Score", "FX_Rank", "AA_Score", "AA_Rank")
+        table <- table %>%
+          mutate(Country = countrycode( str_remove_all(str_extract(Name, "\\((.*?)\\)"), "[()]"), 
+                                        origin = 'ioc', destination = 'country.name.en', 
+                                        custom_match = c("ROC" = "Russia") ) %>% suppressWarnings(),
+                 .after = Name,
+                 Name = str_trim(str_remove_all(Name, "\\(.*?\\)")))
+      }
+      
+      # Change table to be in the proper format
+      table <- table %>% 
+        pivot_longer(cols = -c(Name, Country),
+                     names_to = c("Apparatus", ".value"),
+                     names_sep = "_") %>% 
+        filter(Score != "—") %>% 
+        mutate(Score = as.numeric(Score) %>% suppressWarnings(),
+               Rank = str_extract(Rank, "\\d+") %>% as.numeric(),
+               Gender = gender,
+               Date = final_date,
+               Competition = "Olympic Games",
+               Round = "TeamQual")
+      
+      # Make one dataframe for countries only
+      link_tables[[length(link_tables) + 1]] <- table %>% 
+        filter(Name %in% codelist$country.name.en)
+      
+      # Make one dataframe for gymnasts
+      table <- table %>% 
+        filter(!(Name %in% codelist$country.name.en))
+      
+      link_tables[[i]] <- table
+    }
+    
+    # Append that to the table list
+    table_list <- append(table_list, link_tables)
+  }
+  
+  ##############################################################################
+  ##### Return valid tables all in one
+  return(table_list %>% bind_rows())
+}
+```
+
+```{r}
+team_olympic_finals <- all_olympic_links %>% 
+  keep(grepl("artistic_team", .)) %>%
+  scrape_team_finals() %>% 
+  bind_rows() %>% 
+  suppressWarnings()
+
+team_olympic_quals <- all_olympic_links %>% 
+  keep(grepl("artistic_qualification", .)) %>% 
+  scrape_team_quals()
+
+write.csv(bind_rows(team_olympic_finals, team_olympic_quals), 
+          file = "team_olympic_events.csv", 
+          row.names = FALSE)
+```
 
 
