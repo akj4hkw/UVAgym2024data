@@ -90,6 +90,11 @@ get_gymter_events <- function(Names, Links) {
       birthday <- link_html %>% 
         html_element(xpath = "/html/body/div[1]/div[2]/div[1]/div/article/div/table[1]/tbody/tr[3]/td[2]") %>%
         html_text()
+      
+      # Get country
+      country <- link_html %>% 
+        html_element(xpath = "/html/body/div[1]/div[2]/div[1]/div/article/div/table[1]/tbody/tr[2]/td[2]") %>% 
+        html_text()
 
       # Combine the years and tables
       combined_data <- Map(cbind, Year = years, tables)
@@ -108,7 +113,8 @@ get_gymter_events <- function(Names, Links) {
         mutate(Name = name,
                Date = paste(Date, Year, sep = " "),
                Birthday = birthday,
-               Gender = 'w') %>% 
+               Gender = 'w',
+               Country = country) %>% 
         select(-Year)
 
       # Append the result, name, and link to the data frame
@@ -125,8 +131,8 @@ get_gymter_events <- function(Names, Links) {
   return(event_results)
 }
 
-gymter_events <- get_gymter_events(Names = gymter_names %>% slice(49:1059) %>% pull(Name), 
-                                   Links = gymter_names %>% slice(49:1059) %>% pull(Link))
+gymter_events <- get_gymter_events(Names = gymter_names %>% slice(53:988) %>% pull(Name), 
+                                   Links = gymter_names %>% slice(53:988) %>% pull(Link))
 write.csv(gymter_events, file = "gymter_events.csv", row.names = FALSE)
 ```
 
@@ -531,6 +537,12 @@ indiv_olympic_events <- all_olympic_links %>%
 aa_olympic_events <- all_olympic_links %>% 
   keep(grepl("artistic_individual_all-around", .)) %>% 
   scrape_aa_olympic() 
+
+
+aa_olympic_events %>% 
+  # bind_rows() %>% 
+  filter(is.na(Score))
+
 
 write.csv(bind_rows(indiv_olympic_events, aa_olympic_events), 
           file = "indiv_olympic_events.csv", 
