@@ -244,13 +244,13 @@ scrape_indiv_olympic <- function(link){
     str_match_all("(\\d+\\s+\\w+(?:\\s+\\d{4})?)") %>% 
     unlist()
   if (is.null(comp_dates[1])){ 
-    # If no dates given, assume late July and early August?
-    qual_date <- NA #paste("25 July", year) %>% dmy()
-    final_date <- NA #paste("2 August", year) %>% dmy()
+    # If no dates given, assume early August
+    qual_date <- paste("1 August", year) %>% dmy()
+    final_date <- paste("1 August", year) %>% dmy()
   } else if (is.na(comp_dates[1])){
-    # If no dates given, assume late July and early August?
-    qual_date <- NA #paste("25 July", year) %>% dmy()
-    final_date <- NA #paste("2 August", year) %>% dmy()
+    # If no dates given, assume early August
+    qual_date <- paste("1 August", year) %>% dmy()
+    final_date <- paste("1 August", year) %>% dmy()
   } else if (1 + str_count(comp_dates[1] ,"\\W+") == 3){
     qual_date <- comp_dates[1] %>% dmy()
     final_date <- comp_dates[2] %>% dmy()
@@ -378,13 +378,13 @@ scrape_aa_olympic <- function(links){
       str_match_all("(\\d+\\s+\\w+(?:\\s+\\d{4})?)") %>% 
       unlist()
     if (is.null(comp_dates[1])){ 
-      # If no dates given, assume late July and early August?
-      qual_date <- NA #paste("25 July", year) %>% dmy()
-      final_date <- NA #paste("2 August", year) %>% dmy()
+     # If no dates given, assume early August
+      qual_date <- paste("1 August", year) %>% dmy()
+      final_date <- paste("1 August", year) %>% dmy()
     } else if (is.na(comp_dates[1])){
-      # If no dates given, assume late July and early August?
-      qual_date <- NA #paste("25 July", year) %>% dmy()
-      final_date <- NA #paste("2 August", year) %>% dmy()
+      # If no dates given, assume early August
+      qual_date <- paste("1 August", year) %>% dmy()
+      final_date <- paste("1 August", year) %>% dmy()
     } else if (1 + str_count(comp_dates[1] ,"\\W+") == 3){
       qual_date <- comp_dates[1] %>% dmy()
       final_date <- comp_dates[2] %>% dmy()
@@ -648,7 +648,8 @@ scrape_team_finals <- function(links){
     table <- table %>% 
       mutate(Gender = gender,
              Competition = "Olympic Games",
-             Round = "TeamFinal")
+             Round = "TeamFinal",
+             Date = paste("August 1", year) %>% mdy())
     
     # Save this in the overall list
     tables <- append(tables, list(table))
@@ -696,13 +697,13 @@ scrape_team_quals <- function(links){
       str_match_all("(\\d+\\s+\\w+(?:\\s+\\d{4})?)") %>% 
       unlist()
     if (is.null(comp_dates[1])){ 
-      # If no dates given
-      qual_date <- as.date(year)
-      final_date <- NA 
+     # If no dates given, assume early August
+      qual_date <- paste("1 August", year) %>% dmy()
+      final_date <- paste("1 August", year) %>% dmy()
     } else if (is.na(comp_dates[1])){
-      # If no dates given
-      qual_date <- NA 
-      final_date <- NA 
+      # If no dates given, assume early August
+      qual_date <- paste("1 August", year) %>% dmy()
+      final_date <- paste("1 August", year) %>% dmy()
     } else if (1 + str_count(comp_dates[1] ,"\\W+") == 3){
       qual_date <- comp_dates[1] %>% dmy()
       final_date <- comp_dates[2] %>% dmy()
